@@ -1,128 +1,249 @@
+
 const express = require("express");
 const http = require("http");
-const { Server } = require("socket.io");
+const path = require("path");
 const crypto = require("crypto");
+const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const rooms = new Map();
+
 const PORT = process.env.PORT || 3000;
 const MAX_PEERS = 5;
 
-app.use(express.static("public"));
-app.get("/health", (_, res) => res.json({ ok: true }));
-const path = require("path");
+const rooms = new Map();
 
+// Раздаём файлы сайта из папки public
+app.use(express.static(path.join(__dirname, "public")));
+
+// Проверка работоспособности сервера
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
+
+// Главная страница
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+// Страница любой комнаты, например /abc123
 app.get("/:roomId", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
-function makeRoomId() {
-  return crypto.randomBytes(5).toString("base64url");
-}
-function publicRoom(room) {
+
+// Создание комнаты
+function createRoom() {
   return {
-    video: room.video,
-    playback: room.playback,
-    participants: [...room.participants.values()].map(p => ({
-      id: p.id, name: p.name, camera: p.camera, mic: p.mic
-    }))
+    id: crypto.randomBytes(5).toString("hex"),
+    peers: new Map(),
+    video: null,
+    playing: false,
+    currentTime: 0,
+    updatedAt: Date.now()
   };
 }
-function leaveRoom(socket) {
-  const roomId = socket.data.roomId;
-  if (!roomId) return;
-  const room = rooms.get(roomId);
-  if (room) {
-    room.participants.delete(socket.id);
-    socket.to(roomId).emit("participant-left", socket.id);
-    if (room.participants.size === 0) rooms.delete(roomId);
-    else io.to(roomId).emit("room-state", publicRoom(room));
-  }
-  socket.leave(roomId);
-  socket.data.roomId = null;
+
+// Получение комнаты
+function getRoom(roomId) {
+  return rooms.get(roomId);
 }
+
+// Отправка списка участников
+function broadcastPeers(room) {
+  const peers = Array.from(room.peers.values()).map(peer => ({
+    id: peer.id,
+    nickname: peer.nickname,
+    cameraOn: peer.cameraOn || false,
+    micOn: peer.micOn || false
+  }));
+
+  io.to(room.id).emit("peers", peers);
+}
+
+// Отправка состояния видео
+function broadcastVideo(room) {
+  io.to(room.id).emit("video-state", {
+    video: room.video,
+    playing: room.playing,
+    currentTime: room.currentTime
+  });
+}
+
 io.on("connection", socket => {
-  socket.on("create-room", ack => {
-    let id;
-    do { id = makeRoomId(); } while (rooms.has(id));
-    rooms.set(id, { video: null, playback: { playing: false, time: 0, updatedAt: Date.now() }, participants: new Map() });
-    if (typeof ack === "function") ack({ roomId: id });
+  let currentRoom = null;
+  let currentPeer = null;
+
+  // Создание новой комнаты
+  socket.on("create-room", callback => {
+    const room = createRoom();
+    rooms.set(room.id, room);
+
+    if (typeof callback === "function") {
+      callback({ roomId: room.id });
+    }
   });
 
-  socket.on("join-room", ({ roomId, name }, ack) => {
-    const room = rooms.get(roomId);
-    if (!room) return ack?.({ ok: false, error: "Комната не найдена или уже закрыта." });
-    if (room.participants.size >= MAX_PEERS) return ack?.({ ok: false, error: "В комнате уже 5 участников." });
-    const cleanName = String(name || "").trim().slice(0, 24);
-    if (!cleanName) return ack?.({ ok: false, error: "Введите никнейм." });
+  // Вход в комнату
+  socket.on("join-room", ({ roomId, nickname }, callback) => {
+    const room = getRoom(roomId);
 
-    const existing = [...room.participants.values()].map(p => ({ id: p.id, name: p.name, camera: p.camera, mic: p.mic }));
-    const participant = { id: socket.id, name: cleanName, camera: false, mic: false };
-    room.participants.set(socket.id, participant);
-    socket.join(roomId);
-    socket.data.roomId = roomId;
-    ack?.({ ok: true, self: participant, existing, state: publicRoom(room) });
-    socket.to(roomId).emit("participant-joined", participant);
-    io.to(roomId).emit("room-state", publicRoom(room));
+    if (!room) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Комната не найдена" });
+      }
+      return;
+    }
+
+    if (room.peers.size >= MAX_PEERS) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "В комнате уже 5 участников" });
+      }
+      return;
+    }
+
+    const peer = {
+      id: socket.id,
+      nickname: String(nickname || "Гость").slice(0, 24),
+      cameraOn: false,
+      micOn: false
+    };
+
+    currentRoom = room;
+    currentPeer = peer;
+
+    room.peers.set(socket.id, peer);
+    socket.join(room.id);
+
+    if (typeof callback === "function") {
+      callback({
+        ok: true,
+        roomId: room.id,
+        peerId: socket.id,
+        video: room.video,
+        playing: room.playing,
+        currentTime: room.currentTime
+      });
+    }
+
+    broadcastPeers(room);
+    broadcastVideo(room);
   });
 
-  socket.on("set-video", url => {
-    const room = rooms.get(socket.data.roomId);
-    if (!room) return;
-    const parsed = parseVideoUrl(url);
-    if (!parsed) return socket.emit("notice", "Пока поддерживаются ссылки YouTube.");
-    room.video = parsed;
-    room.playback = { playing: false, time: 0, updatedAt: Date.now() };
-    io.to(socket.data.roomId).emit("video-changed", { video: room.video, playback: room.playback });
+  // Добавить или заменить видео
+  socket.on("set-video", videoUrl => {
+    if (!currentRoom || !currentPeer) return;
+
+    currentRoom.video = String(videoUrl || "").trim() || null;
+    currentRoom.playing = false;
+    currentRoom.currentTime = 0;
+    currentRoom.updatedAt = Date.now();
+
+    broadcastVideo(currentRoom);
   });
 
-  socket.on("playback", command => {
-    const room = rooms.get(socket.data.roomId);
-    if (!room || !room.video) return;
-    const time = Math.max(0, Number(command.time) || 0);
-    room.playback = { playing: !!command.playing, time, updatedAt: Date.now() };
-    io.to(socket.data.roomId).emit("playback", room.playback);
+  // Управление воспроизведением
+  socket.on("play", currentTime => {
+    if (!currentRoom) return;
+
+    currentRoom.playing = true;
+
+    if (Number.isFinite(Number(currentTime))) {
+      currentRoom.currentTime = Math.max(0, Number(currentTime));
+    }
+
+    currentRoom.updatedAt = Date.now();
+    broadcastVideo(currentRoom);
   });
 
-  socket.on("chat", message => {
-    const room = rooms.get(socket.data.roomId);
-    if (!room) return;
-    const participant = room.participants.get(socket.id);
+  socket.on("pause", currentTime => {
+    if (!currentRoom) return;
+
+    currentRoom.playing = false;
+
+    if (Number.isFinite(Number(currentTime))) {
+      currentRoom.currentTime = Math.max(0, Number(currentTime));
+    }
+
+    currentRoom.updatedAt = Date.now();
+    broadcastVideo(currentRoom);
+  });
+
+  // Перемотка
+  socket.on("seek", currentTime => {
+    if (!currentRoom) return;
+
+    const time = Number(currentTime);
+    if (!Number.isFinite(time)) return;
+
+    currentRoom.currentTime = Math.max(0, time);
+    currentRoom.updatedAt = Date.now();
+
+    broadcastVideo(currentRoom);
+  });
+
+  // Остановка и удаление видео
+  socket.on("stop-video", () => {
+    if (!currentRoom) return;
+
+    currentRoom.video = null;
+    currentRoom.playing = false;
+    currentRoom.currentTime = 0;
+    currentRoom.updatedAt = Date.now();
+
+    broadcastVideo(currentRoom);
+  });
+
+  // Сообщения чата
+  socket.on("chat-message", message => {
+    if (!currentRoom || !currentPeer) return;
+
     const text = String(message || "").trim().slice(0, 1000);
-    if (!participant || !text) return;
-    io.to(socket.data.roomId).emit("chat", {
-      id: crypto.randomUUID(), name: participant.name, text, at: Date.now()
+    if (!text) return;
+
+    io.to(currentRoom.id).emit("chat-message", {
+      id: crypto.randomBytes(6).toString("hex"),
+      nickname: currentPeer.nickname,
+      message: text,
+      timestamp: Date.now()
     });
   });
 
+  // Состояние камеры и микрофона
   socket.on("media-state", state => {
-    const room = rooms.get(socket.data.roomId);
-    const p = room?.participants.get(socket.id);
-    if (!p) return;
-    p.camera = !!state.camera;
-    p.mic = !!state.mic;
-    io.to(socket.data.roomId).emit("participant-media", { id: socket.id, camera: p.camera, mic: p.mic });
+    if (!currentRoom || !currentPeer) return;
+
+    currentPeer.cameraOn = Boolean(state?.cameraOn);
+    currentPeer.micOn = Boolean(state?.micOn);
+
+    broadcastPeers(currentRoom);
   });
 
-  socket.on("signal", ({ to, data }) => {
-    if (to && data) io.to(to).emit("signal", { from: socket.id, data });
+  // Передача WebRTC-сигналов между участниками
+  socket.on("signal", ({ target, signal }) => {
+    if (!currentRoom || !target || !signal) return;
+
+    io.to(target).emit("signal", {
+      from: socket.id,
+      signal
+    });
   });
-  socket.on("disconnect", () => leaveRoom(socket));
+
+  // Отключение участника
+  socket.on("disconnect", () => {
+    if (!currentRoom || !currentPeer) return;
+
+    currentRoom.peers.delete(socket.id);
+
+    if (currentRoom.peers.size === 0) {
+      rooms.delete(currentRoom.id);
+    } else {
+      broadcastPeers(currentRoom);
+    }
+  });
 });
 
-function parseVideoUrl(raw) {
-  try {
-    const u = new URL(String(raw));
-    let id = null;
-    if (u.hostname === "youtu.be") id = u.pathname.slice(1);
-    if (["youtube.com", "www.youtube.com", "m.youtube.com"].includes(u.hostname)) {
-      id = u.searchParams.get("v");
-      if (!id && u.pathname.startsWith("/embed/")) id = u.pathname.split("/")[2];
-    }
-    if (!id || !/^[\w-]{6,}$/.test(id)) return null;
-    return { provider: "youtube", id };
-  } catch { return null; }
-}
-
-server.listen(PORT, () => console.log(`Чиллипирик запущен: http://localhost:${PORT}`));
+// Запуск сервера
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Чиллипирик запущен на порту ${PORT}`);
+});
