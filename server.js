@@ -12,7 +12,11 @@ const MAX_PEERS = 5;
 
 app.use(express.static("public"));
 app.get("/health", (_, res) => res.json({ ok: true }));
+const path = require("path");
 
+app.get("/:roomId", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 function makeRoomId() {
   return crypto.randomBytes(5).toString("base64url");
 }
