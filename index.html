@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090d13">
+  <title>Чиллипирик — смотрим вместе</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="home" class="home">
+    <div class="brand"><span class="mouse-mark">●</span><span>Чиллипирик</span></div>
+    <p class="tagline">Смотрите вместе. Даже на расстоянии.</p>
+    <button id="createRoom" class="primary big">Создать комнату</button>
+    <div class="how">
+      <div><b>01</b><span>Создайте комнату</span></div>
+      <div><b>02</b><span>Отправьте ссылку друзьям</span></div>
+      <div><b>03</b><span>Добавьте видео и смотрите вместе</span></div>
+    </div>
+    <p class="footnote">Без регистрации · До 5 участников</p>
+  </main>
+
+  <section id="join" class="modal hidden">
+    <form id="joinForm" class="dialog">
+      <button type="button" class="close" id="closeJoin" aria-label="Закрыть">×</button>
+      <h2>Как тебя называть?</h2>
+      <input id="nickname" maxlength="24" placeholder="Твой никнейм" autocomplete="nickname" required>
+      <button class="primary" type="submit">Войти в комнату</button>
+      <p id="joinError" class="error"></p>
+    </form>
+  </section>
+
+  <main id="room" class="room hidden">
+    <header class="topbar">
+      <a class="brand smallbrand" href="/"><span class="mouse-mark">●</span><span>Чиллипирик</span></a>
+      <div class="room-actions"><span id="roomCode"></span><button id="copyLink" class="subtle">Копировать ссылку</button></div>
+    </header>
+    <div class="workspace">
+      <section class="watch">
+        <div class="add-video">
+          <input id="videoUrl" placeholder="Вставьте ссылку на YouTube">
+          <button id="addVideo" class="primary">Добавить видео</button>
+        </div>
+        <div id="playerWrap" class="player-wrap">
+          <div id="playerPlaceholder" class="placeholder"><div class="play-symbol">▶</div><h2>Здесь будет ваше видео</h2><p>Добавьте ссылку, чтобы начать совместный просмотр</p></div>
+          <div id="player"></div>
+          <div id="cameraLayer" class="camera-layer"></div>
+        </div>
+        <div class="player-controls"><span id="videoStatus">Видео ещё не добавлено</span><button id="playPause" class="subtle" disabled>▶ Воспроизвести</button></div>
+        <div class="media-controls">
+          <button id="cameraBtn" class="subtle">Включить камеру</button>
+          <button id="micBtn" class="subtle">Включить микрофон</button>
+          <span id="mediaStatus"></span>
+        </div>
+      </section>
+      <aside id="chatPanel" class="chat">
+        <div class="chat-head"><h3>Общий чат</h3><button id="toggleChat" class="subtle" aria-label="Свернуть чат">−</button></div>
+        <div id="messages" class="messages"><p class="chat-empty">Сообщения появятся здесь</p></div>
+        <form id="chatForm" class="chat-compose"><input id="chatInput" maxlength="1000" placeholder="Написать сообщение…"><button class="primary" aria-label="Отправить">➤</button></form>
+      </aside>
+    </div>
+    <footer class="room-footer"><span id="participants">Участники: 1/5</span><span>Все участники равноправны</span></footer>
+  </main>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
